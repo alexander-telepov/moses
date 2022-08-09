@@ -1,4 +1,5 @@
 from collections import Counter
+from itertools import product
 import pickle
 import re
 import numpy as np
@@ -8,7 +9,7 @@ from rdkit import Chem
 from rdkit.Chem.BRICS import reactionDefs
 
 import moses
-from moses.metrics.utils import fragmenter
+from moses.metrics.utils import fragmenter, CremFragmenter
 from moses.utils import mapper
 
 isotope_re = re.compile(r'\[([0-9]+)[ab]?\*\]')
@@ -33,18 +34,29 @@ for row in reactionDefs:
 
 
 class CombinatorialGenerator:
-    def __init__(self, n_jobs=1, mode=0):
+    def __init__(self, n_jobs=1, mode=0, fragmentation='brics', 
+            fragdb_path=None, verbose=False, radius=2):
         """
-        Combinatorial Generator randomly connects BRICS fragments
+        Combinatorial Generator randomly connects BRICS/CReM fragments
 
         Arguments:
             n_jobs: number of processes for training
             mode: sampling mode
                 0: Sample fragment then connection
                 1: Sample connection point then fragments
+            fragmentation: fragmentation procedure: brics/crem
+            fragdb_path: path to temporary files for CReM fragmentation
+            verbose: print progress of generation process and CReM fragmentation
+            radius: radius of molecular context in CReM fragmentation
         """
         self.n_jobs = n_jobs
+        if fragmentation not in ['brics', 'crem']:
+            raise ValueError('Incorrect fragmentation procedure: %s' % fragmentation)
+        self.fragmentation = fragmentation
         self.set_mode(mode)
+        self.fragdb_path = fragdb_path
+        self.radius = radius
+        self.verbose = verbose
         self.fitted = False
 
     def fit(self, data):
@@ -55,8 +67,16 @@ class CombinatorialGenerator:
             data: list of SMILES, training dataset
 
         """
-        # Split molecules from dataset into BRICS fragments
-        fragments = mapper(self.n_jobs)(fragmenter, data)
+        # Split molecules from dataset into fragments
+        if self.fragmentation == 'brics':
+            fragments = mapper(self.n_jobs)(fragmenter, data)
+        elif self.fragmentation == 'crem':
+            fragments = CremFragmenter(
+                ncpu=self.n_jobs,
+                fragdb_dir=self.fragdb_path, 
+                radius=self.radius,
+                verbose=self.verbose
+            ).fragment(data)
 
         # Compute fragment frequencies
         counts = Counter()
@@ -70,19 +90,23 @@ class CombinatorialGenerator:
             fragment.count('*')
             for fragment in counts['fragment'].values
         ]
-        counts['connection_rules'] = [
-            self.get_connection_rule(fragment)
-            for fragment in counts['fragment'].values
-        ]
+        if self.fragmentation == 'brics':
+            counts['connection_rules'] = [
+                self.get_connection_rule(fragment)
+                for fragment in counts['fragment'].values
+            ]
         counts['frequency'] = counts['count'] / counts['count'].sum()
         self.fragment_counts = counts
 
         # Compute number of fragments distribution
-        fragments_count_distribution = Counter([len(f) for f in fragments])
-        total = sum(fragments_count_distribution.values())
-        for k in fragments_count_distribution:
-            fragments_count_distribution[k] /= total
-        self.fragments_count_distribution = fragments_count_distribution
+        if self.fragmentation == 'brics':
+            fragments_count_distribution = Counter([len(f) for f in fragments])
+            total = sum(fragments_count_distribution.values())
+            for k in fragments_count_distribution:
+                fragments_count_distribution[k] /= total
+            self.fragments_count_distribution = fragments_count_distribution
+        elif self.fragmentation == 'crem':
+            self.fragments_count_distribution = Counter({4: 1.0})
         self.fitted = True
         return self
 
@@ -100,7 +124,9 @@ class CombinatorialGenerator:
             'fragment_counts': self.fragment_counts,
             'fragments_count_distribution': self.fragments_count_distribution,
             'n_jobs': self.n_jobs,
-            'mode': self.mode
+            'mode': self.mode,
+            'fragmentation': self.fragmentation,
+            'radius': self.radius
         }
         with open(path, 'wb') as f:
             pickle.dump(data, f)
@@ -124,6 +150,8 @@ class CombinatorialGenerator:
             data['fragments_count_distribution']
         model.n_jobs = data['n_jobs']
         model.mode = data['mode']
+        model.fragmentation = data['fragmentation']
+        model.radius = data['radius']
         model.fitted = True
         return model
 
@@ -179,18 +207,24 @@ class CombinatorialGenerator:
                 if self.mode == 1:  # Choose connection atom first
                     connections_mol = [np.random.choice(connections_mol)]
 
-                con_filter = self.get_connection_filter(connections_mol)
-                # Mask fragments with possible reactions
-                counts_masked = counts_masked[
-                    counts_masked['connection_rules'] & con_filter > 0
-                ]
+                if self.fragmentation == 'brics':
+                    con_filter = self.get_connection_filter(connections_mol)
+                    # Mask fragments with possible reactions
+                    counts_masked = counts_masked[
+                        counts_masked['connection_rules'] & con_filter > 0
+                    ]
                 fragment = self.sample_fragment(counts_masked)
                 connections_fragment = self.get_connection_points(fragment)
-                possible_connections = self.filter_connections(
-                    connections_mol,
-                    connections_fragment
-                )
-
+                if self.fragmentation == 'brics':
+                    possible_connections = self.filter_connections(
+                        connections_mol,
+                        connections_fragment
+                    )
+                elif self.fragmentation == 'crem':
+                    possible_connections = list(product(
+                        connections_mol,
+                        connections_fragment
+                    ))
                 c_i = np.random.choice(len(possible_connections))
                 a1, a2 = possible_connections[c_i]
 
@@ -296,9 +330,13 @@ class CombinatorialGenerator:
 
 def reproduce(seed, samples_path=None, metrics_path=None,
               n_jobs=1, device='cpu', verbose=False,
-              samples=30000):
+              samples=10, fragmentation='brics', 
+              fragdb_path=None, radius=2):
     train = moses.get_dataset('train')
-    model = CombinatorialGenerator(n_jobs=n_jobs)
+    model = CombinatorialGenerator(
+        n_jobs=n_jobs, fragmentation=fragmentation,
+        fragdb_path=fragdb_path, verbose=verbose, radius=radius
+    )
 
     if verbose:
         print("Training...")
@@ -341,12 +379,33 @@ if __name__ == "__main__":
     parser.add_argument(
         '--metrics_path', type=str, required=False,
         default='.', help='Path to save metrics')
+    parser.add_argument(
+        '--fragmentation', type=str, required=False,
+        default='brics', choices=['brics', 'crem'],
+        help='Fragmentation procedure: brics or crem; crem option can be computationally and memory intensive')
+    parser.add_argument(
+        '--verbose', required=False,
+        default=False, action='store_true',
+        help='Print progress of generation process and CReM fragmentation')
+    parser.add_argument(
+        '--radius', type=int, required=False,
+        default=2, help='Radius of molecular context in CReM fragmentation')
+    parser.add_argument(
+        '--fragdb_path', type=str, required=False,
+        default='./fragdb_dir', help='Path to temporary files for CReM fragmentation')
     args = parser.parse_known_args()[0]
 
     for seed in [1, 2, 3]:
         filename = f'combinatorial_metrics_{seed}.csv'
         metrics_path = os.path.join(args.metrics_path, filename)
 
-        reproduce(seed=seed, n_jobs=args.n_jobs,
-                  device=args.device, verbose=True,
-                  metrics_path=metrics_path)
+        reproduce(
+            seed=seed, 
+            n_jobs=args.n_jobs,
+            device=args.device, 
+            verbose=args.verbose,
+            metrics_path=metrics_path,
+            fragmentation=args.fragmentation,
+            fragdb_path=args.fragdb_path,
+            radius=args.radius
+        )

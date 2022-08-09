@@ -1,5 +1,7 @@
 import os
 from collections import Counter
+from shutil import rmtree
+import sqlite3
 from functools import partial
 import numpy as np
 import pandas as pd
@@ -15,6 +17,9 @@ from rdkit.Chem import Descriptors
 from moses.metrics.SA_Score import sascorer
 from moses.metrics.NP_Score import npscorer
 from moses.utils import mapper, get_mol
+from crem.fragmentation import main as fragmentation
+from crem.frag_to_env_mp import main as frag_to_env
+from crem.import_env_to_db import main as env_to_db 
 
 _base_dir = os.path.split(__file__)[0]
 _mcf = pd.read_csv(os.path.join(_base_dir, 'mcf.csv'))
@@ -81,6 +86,129 @@ def fragmenter(mol):
     fgs = AllChem.FragmentOnBRICSBonds(get_mol(mol))
     fgs_smi = Chem.MolToSmiles(fgs).split(".")
     return fgs_smi
+
+
+class CremFragmenter:
+    """
+    CReM Fragmenter fragment set of molecules using CReM
+    """
+    def __init__(self, ncpu=1, fragdb_dir=None, radius=2, verbose=False):
+        self.ncpu = ncpu
+        self.fragdb_dir = fragdb_dir
+        self.radius = radius
+        self.verbose = verbose
+        os.makedirs(fragdb_dir, exist_ok=True)
+
+    def remove_duplicates(self):
+        att = Chem.MolFromSmiles('*')
+        H = Chem.MolFromSmiles('[H]')
+
+        def canon_smi(smile):
+            return Chem.MolToSmiles(Chem.RemoveHs(Chem.ReplaceSubstructs(
+                Chem.MolFromSmiles(smile), att, H, replaceAll=True)[0]))
+
+        def num_att(smile):
+            return smile.count('*')
+
+        class MaxAtt:
+            def __init__(self):
+                self.max = 0
+                self.smi = ''
+                self.cnt = 0
+
+            def step(self, smi, n_att):
+                self.cnt += 1
+                if n_att > self.max:
+                    self.max = n_att
+                    self.smi = smi
+
+            def finalize(self):
+                return f"{self.cnt},{self.smi}"
+
+        query = """
+            CREATE TABLE radius2_filtered AS 
+                WITH radius2 AS (
+                    SELECT * 
+                    FROM (
+                        radius2 
+                        JOIN 
+                        (SELECT id, _canon_smi(core_smi) as canon_smi FROM radius2) as canon_smi 
+                        ON 
+                        radius2.id = canon_smi.id
+                    )
+                )
+                        
+                SELECT _max_att(core_smi, num_attach)
+                FROM (   
+                    radius2 
+                    JOIN 
+                    (SELECT id, _num_att(core_smi) as num_att FROM radius2) as num_att 
+                    ON 
+                    num_att.id = radius2.id
+                )
+                GROUP BY canon_smi
+        """
+
+        with sqlite3.connect(db_path) as con:
+            cur = con.cursor()
+            cur.execute("DROP TABLE IF EXISTS radius2_filtered")
+            con.create_function("_num_att", 1, num_att)
+            con.create_function("_canon_smi", 1, canon_smi)
+            con.create_aggregate("_max_att", 2, MaxAtt)
+
+            cur.execute(query)
+            con.commit()
+
+    def fragment(self, smiles):
+        with open(os.path.join(self.fragdb_dir, 'smiles.smi'), 'wt') as f:
+            f.write('\n'.join(smiles))
+        
+        fragmentation(
+            input_fname=os.path.join(self.fragdb_dir, 'smiles.smi'),
+            output_fname=os.path.join(self.fragdb_dir, 'frags.txt'),
+            sep=None,
+            ncpu=self.ncpu,
+            verbose=self.verbose
+        )
+
+        frag_to_env(
+            input_fname=os.path.join(self.fragdb_dir, 'frags.txt'),
+            output_fname=os.path.join(self.fragdb_dir, f'r{self.radius}.txt'),
+            keep_mols=None,
+            radius=self.radius,
+            keep_stereo=False,
+            max_heavy_atoms=20,
+            ncpu=self.ncpu,
+            store_comp_id=False,
+            verbose=self.verbose
+        )
+
+        with open(os.path.join(self.fragdb_dir, f'r{self.radius}.txt'), 'rt') as f:
+            text = f.read()
+        
+        with open(os.path.join(self.fragdb_dir, f'r{self.radius}_c.txt'), 'wt') as f:
+            for frag, freq in Counter(text.split('\n')[:-1]).items():
+                f.write(f'{freq} {frag}\n')
+
+        env_to_db(
+            input_fname=os.path.join(self.fragdb_dir, f'r{self.radius}_c.txt'),
+            output_fname=os.path.join(self.fragdb_dir, 'fragments.db'),
+            radius=self.radius,
+            counts=True,
+            ncpu=self.ncpu,
+            verbose=self.verbose
+        )
+       
+       self.remove_duplicates()
+
+        with sqlite3.connect(os.path.join(self.fragdb_dir, 'fragments.db')) as con:
+            cur = con.cursor()
+            frags = cur.execute(f"SELECT core_smi FROM radius{self.radius}_filtered")
+            frags = frags.fetchall()
+
+        rmtree(self.fragdb_dir)
+
+        return [[frag[0].split(",")[1] for frag in frags]]
 
 
 def compute_fragments(mol_list, n_jobs=1):
