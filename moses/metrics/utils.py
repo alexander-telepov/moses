@@ -130,25 +130,25 @@ class CremFragmenter:
                 WITH radius2 AS (
                     SELECT * 
                     FROM (
-                        radius2 
+                        main.radius2 
                         JOIN 
-                        (SELECT id, _canon_smi(core_smi) as canon_smi FROM radius2) as canon_smi 
+                        (SELECT rowid, _canon_smi(core_smi) as canon_smi FROM main.radius2) as canon_smi 
                         ON 
-                        radius2.id = canon_smi.id
+                        main.radius2.rowid = canon_smi.rowid
                     )
                 )
                         
-                SELECT _max_att(core_smi, num_attach)
+                SELECT _max_att(core_smi, num_att) as core_smi
                 FROM (   
                     radius2 
                     JOIN 
-                    (SELECT id, _num_att(core_smi) as num_att FROM radius2) as num_att 
+                    (SELECT rowid, _num_att(core_smi) as num_att FROM radius2) as num_att 
                     ON 
-                    num_att.id = radius2.id
+                    num_att.rowid = radius2.rowid
                 )
                 GROUP BY canon_smi
         """
-
+        db_path = self.fragdb_dir + "/fragments.db"
         with sqlite3.connect(db_path) as con:
             cur = con.cursor()
             cur.execute("DROP TABLE IF EXISTS radius2_filtered")
@@ -199,7 +199,7 @@ class CremFragmenter:
             verbose=self.verbose
         )
        
-       self.remove_duplicates()
+        self.remove_duplicates()
 
         with sqlite3.connect(os.path.join(self.fragdb_dir, 'fragments.db')) as con:
             cur = con.cursor()
