@@ -66,7 +66,8 @@ class ORGAN(nn.Module):
 
         self.metrics_reward = MetricsReward(
             config.n_ref_subsample, config.rollouts,
-            config.n_jobs, config.additional_rewards)
+            config.n_jobs, config.additional_rewards,
+            config.metrics_configs)
         self.reward_weight = config.reward_weight
 
         self.vocabulary = vocabulary

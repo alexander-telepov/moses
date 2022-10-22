@@ -11,6 +11,7 @@ from .metrics import get_all_metrics, \
                      ScafMetric
 from .utils import mol_passes_filters, compute_scaffold
 from .metrics import WassersteinMetric, weight, logP, SA, QED
+from .docking import DockingVina
 
 
 __all__ = ['get_all_metrics',

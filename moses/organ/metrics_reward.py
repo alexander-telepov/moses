@@ -5,14 +5,16 @@ import numpy as np
 from moses.metrics import remove_invalid, \
                           fraction_passes_filters, internal_diversity, \
                           FCDMetric, SNNMetric, FragMetric, ScafMetric, \
-                          WassersteinMetric, logP, QED, SA, weight
+                          WassersteinMetric, logP, QED, SA, weight, \
+                          DockingVina
 from moses.utils import mapper, get_mol
 
 
 class MetricsReward:
     supported_metrics = ['fcd', 'snn', 'fragments', 'scaffolds',
                          'internal_diversity', 'filters',
-                         'logp', 'sa', 'qed', 'weight']
+                         'logp', 'sa', 'qed', 'weight',
+                         'docking']
 
     @staticmethod
     def _nan2zero(value):
@@ -21,7 +23,7 @@ class MetricsReward:
 
         return value
 
-    def __init__(self, n_ref_subsample, n_rollouts, n_jobs, metrics=[]):
+    def __init__(self, n_ref_subsample, n_rollouts, n_jobs, metrics=[], metrics_configs={}):
         assert all([m in MetricsReward.supported_metrics for m in metrics])
 
         self.n_ref_subsample = n_ref_subsample
@@ -30,6 +32,7 @@ class MetricsReward:
         n_jobs = n_jobs if False else 1
         self.n_jobs = n_jobs
         self.metrics = metrics
+        self.metrics_configs = metrics_configs
 
     def get_reference_data(self, data):
         ref_smiles = remove_invalid(data, canonize=True, n_jobs=self.n_jobs)
@@ -80,10 +83,19 @@ class MetricsReward:
                     m = -WassersteinMetric(func=weight, n_jobs=self.n_jobs)(
                         ref_mols, rollout_mols
                     )
+                elif metric_name == 'docking':
+                    cfg = self.metrics_configs['docking']
+                    m = DockingVina(cfg, cfg['seed']).predict(
+                        rollout_mols
+                    )
 
-                m = MetricsReward._nan2zero(m)
-                for i in range(len(rollout)):
-                    result[i].append(m)
+                if metric_name == 'docking':
+                    for i, _m in zip(range(len(rollout)), m):
+                        result[i].append(_m)
+                else:
+                    m = MetricsReward._nan2zero(m)
+                    for i in range(len(rollout)):
+                        result[i].append(m)
 
         return result
 
