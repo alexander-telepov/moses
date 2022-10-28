@@ -92,68 +92,34 @@ def get_parser(parser=None):
                         help='Adding of addition rewards')
     
     # Docking
-    parser.add_argument('--target', type=str, default='usp7',
-                        choices=['fa7', 'parp1', '5ht1b', 'usp7', 'abl1', 'fkb1a'])
-    parser.add_argument('--receptor_path', type=str, required=True)
-    parser.add_argument('--vina_path', type=str, required=True)
-    parser.add_argument('--temp_dir', type=str, required=True)
-    parser.add_argument('--alpha', type=float, required=True)
-    parser.add_argument('--exhaustiveness', type=int, default=8)
-    parser.add_argument('--num_modes', type=int, default=10)
-    parser.add_argument('--num_sub_proc', type=int, default=1)
-    parser.add_argument('--n_conf', type=int, default=3)
+    parser.add_argument('--receptor_path', type=str, required=True, action=DockingConfigAction)
+    parser.add_argument('--box_center', nargs=3, type=float, required=True, action=DockingConfigAction)
+    parser.add_argument('--box_size', nargs=3, type=float, required=True, action=DockingConfigAction)
+    parser.add_argument('--vina_path', type=str, required=True, action=DockingConfigAction)
+    parser.add_argument('--temp_dir', type=str, required=True, action=DockingConfigAction)
+    parser.add_argument('--alpha', type=float, required=True, action=DockingConfigAction)
+    parser.add_argument('--exhaustiveness', type=int, default=8, action=DockingConfigAction)
+    parser.add_argument('--num_modes', type=int, default=10, action=DockingConfigAction)
+    parser.add_argument('--num_sub_proc', type=int, default=1, action=DockingConfigAction)
+    parser.add_argument('--n_conf', type=int, default=3, action=DockingConfigAction)
 
     return parser
 
 
-def get_docking_config(args):
-    if args.target == 'fa7':
-        box_center = (10.131, 41.879, 32.097)
-        box_size = (20.673, 20.198, 21.362)
-    elif args.target == 'parp1':
-        box_center = (26.413, 11.282, 27.238)
-        box_size = (18.521, 17.479, 19.995)
-    elif args.target == '5ht1b':
-        box_center = (-26.602, 5.277, 17.898)
-        box_size = (22.5, 22.5, 22.5)
-    elif args.target == 'usp7':
-        if args.pocket_id == 0:
-            box_center = (2.860, 4.819, 92.848)
-            box_size = (17.112, 17.038, 14.958)
-        elif args.pocket_id == 1:
-            box_center = (27.413, 1.55, 29.902)
-            box_size = (16.221, 16.995, 17.858)
-    elif args.target == 'abl1':
-        box_center = (16.496, 14.747, 3.999)
-        box_size = (14.963, 8.151, 5.892)
-    elif args.target == 'fkb1a':
-        box_center = (-35.137, 39.04, 32.495)
-        box_size = (8.453, 13.483, 8.112)
-    else:
-        raise ValueError(f'Unknown receptor {args.target}.')
-
-    docking_config = {
-        'receptor_file': args.receptor_path,
-        'box_center': box_center,
-        'box_size': box_size,
-        'vina_program': args.vina_path,
-        'temp_dir': args.temp_dir,
-        'exhaustiveness': args.exhaustiveness,
-        'num_sub_proc': args.num_sub_proc,
-        'num_modes': args.num_modes,
-        'timeout_gen3d': None,
-        'timeout_dock': None,
-        'seed': args.seed,
-        'n_conf': args.n_conf,
-        'error_val': 99.9,
-        'alpha': args.alpha
-    }
-
-    return docking_config
+class DockingConfigAction(argparse._StoreAction):
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        if not hasattr(namespace, 'additional_rewards_configs'):
+            namespace.additional_rewards_configs = dict()
+        if not 'docking' in namespace.additional_rewards_configs:
+            namespace.additional_rewards_configs['docking'] = dict()
+        namespace.additional_rewards_configs['docking'][self.dest] = values
+        namespace.additional_rewards_configs['docking']['timeout_gen3d'] = None
+        namespace.additional_rewards_configs['docking']['timeout_dock'] = None
+        namespace.additional_rewards_configs['docking']['error_val'] = 99.9
+        namespace.additional_rewards_configs['docking']['seed'] = namespace.seed
 
 
 def get_config():
     parser = get_parser()
-    args = parser.parse_known_args()[0]
-    args.metrics_configs = {'docking': get_docking_config(args)}
-    return args
+    return parser.parse_known_args()[0]

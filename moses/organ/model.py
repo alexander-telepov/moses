@@ -20,7 +20,7 @@ class Generator(nn.Module):
 
     def forward(self, x, lengths, states=None):
         x = self.embedding_layer(x)
-        x = pack_padded_sequence(x, lengths, batch_first=True)
+        x = pack_padded_sequence(x, lengths.cpu(), batch_first=True)
         x, states = self.lstm_layer(x, states)
         x, _ = pad_packed_sequence(x, batch_first=True)
         x = self.linear_layer(x)
@@ -67,7 +67,7 @@ class ORGAN(nn.Module):
         self.metrics_reward = MetricsReward(
             config.n_ref_subsample, config.rollouts,
             config.n_jobs, config.additional_rewards,
-            config.metrics_configs)
+            config.additional_rewards_configs)
         self.reward_weight = config.reward_weight
 
         self.vocabulary = vocabulary
