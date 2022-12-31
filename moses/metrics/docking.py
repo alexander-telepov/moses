@@ -1,19 +1,23 @@
 #!/usr/bin/env python
 import os
+from itertools import repeat
 from multiprocessing import Pool
 from subprocess import run
 import glob
 from functools import partial
 import numpy as np
-import torch
+
+
+def init(env):
+    os.environ = env
 
 
 class DockingVina(object):
-    def __init__(self, config, seed=42):
+    def __init__(self, config):
         super(DockingVina, self).__init__()
         self.config = config
-        self.seed = seed
         self.temp_dir = config['temp_dir']
+        self.seed = config['seed']
         if not os.path.exists(self.temp_dir):
             os.makedirs(self.temp_dir)
         
@@ -23,11 +27,16 @@ class DockingVina(object):
         smiles_set = list(set(smiles_list) - set(self.results.keys()))
 
         if smiles_set:
-            with Pool(processes=self.config['num_sub_proc']) as pool:
-                fnames = map(str, range(len(smiles_set)))
-                binding_affinity = dict(zip(smiles_set, pool.starmap(self.docking, zip(smiles_set, fnames))))
-            
-            self.results = {**self.results, **binding_affinity}
+            binding_affinities = list()
+            fnames = list(map(str, range(len(smiles_set))))
+            for i in range(self.config['n_conf']):
+                child_env = os.environ.copy()
+                child_env['OB_RANDOM_SEED'] = str(self.seed + i)
+                with Pool(processes=self.config['num_sub_proc'], initializer=init, initargs=(child_env,)) as pool:
+                    binding_affinities.append(pool.starmap(self.docking, zip(smiles_set, fnames)))
+
+            binding_affinities = dict(zip(smiles_set, np.minimum.reduce(binding_affinities)))
+            self.results = {**self.results, **binding_affinities}
 
         files = glob.glob(f"{self.temp_dir}/*")
         for file in files:
@@ -39,11 +48,7 @@ class DockingVina(object):
         return self.config['alpha'] * -np.minimum(affinities, 0.0)
 
     def docking(self, smi, fname):
-        results = list()
-        for i in range(self.config['n_conf']):
-            os.environ['OB_RANDOM_SEED'] = str(self.seed + i)
-            results.append(DockingVina._docking(smi, fname, **self.config))
-        return min(results)
+        return DockingVina._docking(smi, fname, **self.config)
 
     @staticmethod
     def _docking(smi, fname, *, vina_program, receptor_file, temp_dir, box_center,
@@ -55,7 +60,7 @@ class DockingVina(object):
 
         run_line = "obabel -:{} --gen3D -h -O {}".format(smi, ligand_file)
         try:
-            result = run(run_line.split(), capture_output=True, text=True, timeout=timeout_gen3d)
+            result = run(run_line.split(), capture_output=True, text=True, timeout=timeout_gen3d, env=os.environ)
         except:
             return error_val
         
