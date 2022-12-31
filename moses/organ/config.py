@@ -92,10 +92,10 @@ def get_parser(parser=None):
                         help='Adding of addition rewards')
     
     # Docking
-    parser.add_argument('--receptor_path', type=str, required=True, action=DockingConfigAction)
+    parser.add_argument('--receptor_file', type=str, required=True, action=DockingConfigAction)
     parser.add_argument('--box_center', nargs=3, type=float, required=True, action=DockingConfigAction)
     parser.add_argument('--box_size', nargs=3, type=float, required=True, action=DockingConfigAction)
-    parser.add_argument('--vina_path', type=str, required=True, action=DockingConfigAction)
+    parser.add_argument('--vina_program', type=str, required=True, action=DockingConfigAction)
     parser.add_argument('--temp_dir', type=str, required=True, action=DockingConfigAction)
     parser.add_argument('--alpha', type=float, required=True, action=DockingConfigAction)
     parser.add_argument('--exhaustiveness', type=int, default=8, action=DockingConfigAction)

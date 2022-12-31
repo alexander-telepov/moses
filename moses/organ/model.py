@@ -207,7 +207,8 @@ class ORGAN(nn.Module):
                     ]
                     obj_rewards = torch.tensor(
                         self.metrics_reward(strings, ref_smiles, ref_mols),
-                        device=rollout_rewards.device
+                        device=rollout_rewards.device,
+                        dtype=torch.float32
                     ).view(-1, 1)
                     rollout_rewards = (
                         rollout_rewards * (1 - self.reward_weight) +

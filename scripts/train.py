@@ -58,7 +58,16 @@ def main(model, config):
     if config.vocab_save is not None:
         torch.save(vocab, config.vocab_save)
 
-    model = MODELS.get_model_class(model)(vocab, config).to(device)
+    model = MODELS.get_model_class(model)(vocab, config)
+
+    # load model
+    model_load_dir = os.path.dirname(config.model_save)
+    discriminator_state = torch.load(os.path.join(model_load_dir, 'organ_model_discriminator_040.pt'))
+    model.discriminator.load_state_dict(discriminator_state)
+    generator_state = torch.load(os.path.join(model_load_dir, 'organ_model_generator_040.pt'))
+    model.generator.load_state_dict(generator_state)
+
+    model = model.to(device)
     trainer.fit(model, train_data, val_data)
 
     model = model.to('cpu')

@@ -4,6 +4,8 @@ from multiprocessing import Pool
 from subprocess import run
 import glob
 from functools import partial
+import numpy as np
+import torch
 
 
 class DockingVina(object):
@@ -34,7 +36,7 @@ class DockingVina(object):
         return self.postprocess([self.results[smile] for smile in smiles_list])
     
     def postprocess(self, affinities):
-        return self.config['alpha'] * -np.minimum(reward, 0.0)
+        return self.config['alpha'] * -np.minimum(affinities, 0.0)
 
     def docking(self, smi, fname):
         results = list()
